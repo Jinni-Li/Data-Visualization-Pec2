@@ -1,0 +1,164 @@
+---
+title: "Visualización de Datos - PEC2"
+author: "Jinni Li"
+date: "2024-14-11"
+output:
+  html_document:
+    toc: yes
+always_allow_html: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### 0. Base de datos
+
+El conjunto de datos utilizado para este análisis proviene del repositorio de Machine Learning de la Universidad de California en Irvine. Está compuesto por 2018 observaciones, cada una correspondiente a un distrito diferente de los Estados Unidos. Aunque el dataset original contiene 125 variables independientes, para este proyecto de visualización de datos se utilizarán únicamente 3 variables claves:
+
+-   states: los estados de Estados Unidos representados en el conjunto de datos.
+
+-   medIncome: el ingreso medio por hogar en cada distrito.
+
+-   PctUnemployed: el porcentaje de personas mayores de 16 años que forman parte de la fuerza laboral y están desempleadas.
+
+La selección de estas variables permite explorar y visualizar aspectos socioeconómicos esenciales de los distritos estadounidenses, centrándose en la relación entre el ingreso medio y el desempleo en los distintos estados.
+
+#### 0.1 Preparación de datos
+
+Primero cargamos todas las librerías que vamos a necesitar para ejecutar el archivo.
+
+```{r}
+library(ggplot2)
+library(maps)
+library(usmap)
+library(plotly)   # Para el gauge plot
+library(ggdist)
+library(sf)
+library(tidyverse)
+```
+
+Importamos la base de datos y examinamos la distribución de cada variable
+
+```{r}
+# Leer el archivo
+x = read.csv("./crime.csv")
+x <- select(x, state, ViolentCrimesPerPop, medIncome,PctUnemployed, )
+summary(x)
+```
+Quitamos las variables missings.
+
+```{r}
+x <- na.omit(x)
+head(x)
+```
+
+### 1. Choropleth Map - `ViolentCrimesPerPop` por estados
+
+
+```{r}
+# Crear el resumen de crímenes violentos promedio por estado en `state_summary`
+state_summary <- x %>%
+  group_by(state) %>%
+  summarize(ViolentCrimesPerPop = mean(ViolentCrimesPerPop, na.rm = TRUE))
+
+# Convertir los nombres de estado en minúsculas para coincidir con los datas de la librería map
+state_summary <- state_summary %>%
+  mutate(state = tolower(state))
+
+# Crear un diccionario de abreviaturas y nombres completos de estados
+state_names <- data.frame(
+  state = tolower(state.abb),       
+  state_full = tolower(state.name)   
+)
+
+# Unir `state_summary` con los nombres completos de los estados
+state_summary <- left_join(state_summary, state_names, by = "state")
+
+# Cargar datos del mapa de estados
+states_map <- map_data("state")
+
+# Unir los datos del mapa con `state_summary` usando el nombre completo del estado
+choropleth_data <- left_join(states_map, state_summary, by = c("region" = "state_full"))
+
+# Crear el mapa de coropletas
+ggplot(choropleth_data, aes(long, lat, group = group, fill = ViolentCrimesPerPop)) +
+  geom_polygon(color = "white") +
+  coord_fixed(1.3) +
+  scale_fill_viridis_c(option = "plasma", na.value = "gray") +
+  labs(title = "Crímenes Violentos por Población por Estado",
+       fill = "Crímenes Violentos") +
+  theme_minimal()
+```
+
+### 2. Gauge Diagram - `PctUnemployed` en Nueva York
+
+Como Gauge solamente permite estudia una variable, creo que sería interesante estudiar el ration de desempleo del capital de EUA y mirar donde está situado a nivel de todo el país teniendo encuenta que el promedio de EEUU de desempleo es 6.045%
+
+```{r}
+# Filtrar el dataset para obtener el valor promedio de desempleo en Nueva York
+ny_unemployment <- x %>%
+  filter(state == "NY") %>%
+  summarize(PctUnemployed = mean(PctUnemployed, na.rm = TRUE)) %>%
+  pull(PctUnemployed) # Extraer el valor de la columna
+
+# Crear el Gauge Diagram para el desempleo en Nueva York
+fig <- plot_ly(
+  domain = list(x = c(0, 1), y = c(0, 1)),
+  value = ny_unemployment,
+  title = list(text = "Porcentaje de Desempleo en Nueva York"),
+  type = "indicator",
+  mode = "gauge+number",
+  gauge = list(
+    axis = list(
+      range = list(0, 35),                  # Cambiar el rango a 0 - 28
+      tickvals = c(0, 7, 14, 21, 28,35),       # Especificar los valores de las marcas en intervalos de 7
+      ticktext = c("0", "7", "14", "21", "28", "35") # Etiquetas para cada marca
+    ), 
+    steps = list(
+      list(range = c(0, 7), color = "lightgray"),
+      list(range = c(7, 14), color = "gray"),
+      list(range = c(14, 21), color = "lightblue"),
+      list(range = c(21, 28), color = "blue"),
+      list(range = c(28, 35), color = "darkblue")
+    ),
+    threshold = list(
+      line = list(color = "red", width = 4),
+      thickness = 0.75,
+      value = ny_unemployment
+    )
+  )
+)
+
+# Mostrar el gráfico
+fig
+
+```
+
+Como se observa en la gráfica, NY supera el promedio del país y parece estar bien situado si comparamos con el resto del país, ya se se encuentra situado en la 2a franja con el porcentaje más bajo.
+
+### 3. Rain Cloud Plot - `medIncome` en Nueva York
+
+Con el resultado anterior, sabemos que en Nueva York más del 92% de los habitantes tienen trabajo en el momento que se coleccionó estos datos. Ahora, estudiamos el ingreso por household para Nueva York y vemos si la riqueza esta equitativamente repartida en el estado
+
+```{r}
+# Filtrar por Nueva York
+subset_data <- x %>%
+  filter(state %in% c("NY"))
+
+# Crear el Rain Cloud Plot
+ggplot(subset_data, aes(x = state, y = medIncome, fill = state)) +
+  ggdist::stat_halfeye(
+    adjust = .5, width = .6, .width = 0, justification = -.2, point_colour = NA
+  ) +
+  geom_boxplot(
+    width = .12, outlier.shape = NA, alpha = 0.3
+  ) +
+  ggdist::geom_dots(
+    aes(fill = state), binwidth = 200, dotsize = .7, color = "black"
+  ) +
+  labs(title = "Distribución de Ingreso Medio por Estado", x = "Estado", y = "Ingreso Medio") +
+  theme_minimal()
+```
+
+Como era de esperar, la distribución de Ingreso medio por household está muy sesgado negativamente. Se puede observar que la mayoría (>50%) tienen el ingreso por debajo de 30k$ Y solamente hay unos pocos que ingresan más de 30k, el máximo se situa en 70k\$, casi el triple del promedio. 
